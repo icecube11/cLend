@@ -75,7 +75,7 @@ contract CLending is OwnableUpgradeable {
         } else {
             userSummaryStorage.amountDAIBorrowed =
                 userSummaryStorage.amountDAIBorrowed -
-                offeredCollateralValue -
+                offeredCollateralValue +
                 _accruedInterest;
             // Send the repayment amt
             updateDebtTime(userSummaryStorage);
@@ -228,7 +228,7 @@ contract CLending is OwnableUpgradeable {
     function accruedInterest(address user) public view returns (uint256) {
         DebtorSummary memory userSummaryMemory = debtorSummary[user];
         uint256 timeSinceLastLoan = block.timestamp - userSummaryMemory.timeLastBorrow;
-        return (userSummaryMemory.amountDAIBorrowed * yearlyPercentInterest * timeSinceLastLoan) / 365 days; // 365days * 100
+        return (userSummaryMemory.amountDAIBorrowed * yearlyPercentInterest / 100 * timeSinceLastLoan) / 365 days; // 365days * 100
     }
 
     function editAmountBorrowed(DebtorSummary storage userSummaryStorage, uint256 addToBorrowed) private {
