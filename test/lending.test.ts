@@ -1,11 +1,12 @@
 import { expect } from "chai"
 import { ethers, deployments } from "hardhat"
-import { CLending, IERC20 } from "../types"
-import { blockNumber, getBigNumber, impersonate } from "./utilities"
+import { CLending, IERC20, CoreDAO } from "../types"
+import { blockNumber, getBigNumber, impersonate, advanceTimeAndBlock, latest } from "./utilities"
 import { constants } from "../constants"
 import { BigNumber } from "ethers"
 
 let cLending: CLending
+let coreDAO: CoreDAO
 let coreDAOTreasury
 let yearlyPercentInterest
 let loanDefaultThresholdPercent
@@ -20,6 +21,7 @@ describe("Lending", function () {
     await deployments.fixture()
 
     cLending = await ethers.getContract("CLending")
+    coreDAO = await ethers.getContract("CoreDAO")
     coreDAOTreasury = await cLending.coreDAOTreasury()
     yearlyPercentInterest = await cLending.yearlyPercentInterest()
     loanDefaultThresholdPercent = await cLending.loanDefaultThresholdPercent()
@@ -33,6 +35,8 @@ describe("Lending", function () {
     await impersonate(constants.CORE_MULTISIG)
     const coreMultiSigSigner = await ethers.getSigner(constants.CORE_MULTISIG)
     await CORE.connect(coreMultiSigSigner).transfer(account1.address, getBigNumber(123))
+    console.log("coreDAO balance in signer: " + (await coreDAO.balanceOf(coreMultiSigSigner.address)))
+    // await coreDAO.connect(coreMultiSigSigner).transfer(account1.address, getBigNumber(123))
 
     // Fund the lending contract with DAI
     await DAI.connect(coreMultiSigSigner).transfer(cLending.address, await DAI.balanceOf(coreMultiSigSigner.address))
@@ -77,6 +81,45 @@ describe("Lending", function () {
 
   it("should lets people repay and get their debt lower", async () => {
     // Allows people to repay and get their debt lower
+    const [deployer, account1] = await ethers.getSigners()
+    const collateral = getBigNumber(20, 18) // in CORE
+    const borrowAmount = getBigNumber(10000, 18) // in DAI
+    const repayment = getBigNumber(1, 18) // in CORE, ie repaying 5500 in DAI
+    const borrowedAmountAfterRepayment = getBigNumber(10, 18)
+    await CORE.connect(account1).approve(cLending.address, collateral.add(repayment))
+    // console.log("CORE balance before borrow: " + (await CORE.balanceOf(account1.address)))
+    // console.log("DAI balance before borrow: " + (await DAI.balanceOf(account1.address)))
+    // console.log("coreDAO balance before borrow: " + (await coreDAO.balanceOf(account1.address)))
+    await cLending.connect(account1).addCollateralAndBorrow(constants.CORE, collateral, borrowAmount)
+    // console.log("CORE balance after borrow: " + (await CORE.balanceOf(account1.address)))
+    // console.log("DAI balance after borrow: " + (await DAI.balanceOf(account1.address)))
+    // console.log("coreDAO balance after borrow: " + (await coreDAO.balanceOf(account1.address)))
+    expect(await DAI.balanceOf(account1.address)).to.equal(borrowAmount)
+
+    // console.log("Current block: " + (await latest()))
+    // fast-forward the clock by 1 yr
+    await advanceTimeAndBlock(86400 * 365)
+    // console.log("New block: " + (await latest()))
+
+    const totalDebtBeforeRepayment = await cLending.userTotalDebt(account1.address)
+    console.log("outstanding loan amount with interest before repayment: " + totalDebtBeforeRepayment)
+    const interests = await cLending.accruedInterest(account1.address)
+    console.log("interests before repayment: " + interests)
+    await cLending.connect(account1).repayLoan(constants.CORE, repayment)
+    console.log("CORE balance after repayment: " + (await CORE.balanceOf(account1.address)))
+    console.log("DAI balance after repayment: " + (await DAI.balanceOf(account1.address)))
+    console.log("interests after repayment: " + (await cLending.accruedInterest(account1.address)))
+    const totalDebtAfterRepayment = await cLending.userTotalDebt(account1.address)
+    console.log("outstanding loan amount with interest after repayment: " + totalDebtAfterRepayment)
+    const collaterabilityOfCore = await cLending.collaterabilityOfToken(constants.CORE)
+    console.log("Collateral value per CORE token: " + collaterabilityOfCore)
+    const newBorrowAmountWithoutInterest = borrowAmount.sub(repayment.mul(collaterabilityOfCore))
+    console.log("expected new loan amount ignoring accured interest: " + newBorrowAmountWithoutInterest)
+
+    // Borrow 10000 DAI, repay 5500 DAI: new borrowed amount is 4500 DAI when ignoring accured interests
+    // therefore the new borrow amount taking accured interests into account should be >= 4500
+    // (equal if interest rate is 0)
+    expect(totalDebtAfterRepayment).gte(newBorrowAmountWithoutInterest)
   })
 
   it("should lets people provide too much to repay with any token, and it be calculated correctly based on the token collaterability", async () => {})
